@@ -5,43 +5,94 @@ require_once 'auth.php';
 require_login();
 require_role(['admin']);
 
-$pageTitle = 'Add User';
+$pageTitle = 'Edit User (Full Details)';
 
-// Default form values
-$first_name        = '';
-$last_name         = '';
-$username          = '';
-$password          = '';
-$role              = '';
+// -----------------------------
+// 1. Get user id & fetch record
+// -----------------------------
+$user_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+if ($user_id <= 0) {
+    header('Location: manage_users.php');
+    exit;
+}
 
-$email             = '';
-$mobile            = '';
-$phone             = '';
-$address           = '';
+$stmt = $mysqli->prepare("
+    SELECT 
+        id,
+        full_name,
+        first_name,
+        last_name,
+        username,
+        password,
+        role,
+        email,
+        mobile,
+        phone,
+        address,
+        social_facebook,
+        social_linkedin,
+        social_instagram,
+        social_twitter,
+        social_other,
+        profile_image
+    FROM users
+    WHERE id = ?
+");
+if (!$stmt) {
+    die('Database error: ' . $mysqli->error);
+}
+$stmt->bind_param('i', $user_id);
+$stmt->execute();
+$res  = $stmt->get_result();
+$user = $res->fetch_assoc();
+$stmt->close();
 
-$social_facebook   = '';
-$social_linkedin   = '';
-$social_instagram  = '';
-$social_twitter    = '';
-$social_other      = '';
+if (!$user) {
+    header('Location: manage_users.php');
+    exit;
+}
+
+// -----------------------------
+// 2. Default form values (from DB)
+// -----------------------------
+$first_name        = $user['first_name'] ?? '';
+$last_name         = $user['last_name'] ?? '';
+$username          = $user['username'] ?? '';
+$role              = $user['role'] ?? 'employee';
+
+$email             = $user['email'] ?? '';
+$mobile            = $user['mobile'] ?? '';
+$phone             = $user['phone'] ?? '';
+$address           = $user['address'] ?? '';
+
+$social_facebook   = $user['social_facebook'] ?? '';
+$social_linkedin   = $user['social_linkedin'] ?? '';
+$social_instagram  = $user['social_instagram'] ?? '';
+$social_twitter    = $user['social_twitter'] ?? '';
+$social_other      = $user['social_other'] ?? '';
+
+$existingPassword  = $user['password'] ?? '';
+$password          = ''; // we do NOT prefill password field
 
 $errors            = [];
+$success           = '';
 
-// Will hold final stored path/filename if upload succeeds
-$profile_image_path   = null;
+// Existing profile image path (may be null/empty)
+$profile_image_path  = $user['profile_image'] ?: null;
 
-// Temp vars for upload handling (so we only move file if everything else is valid)
-$profileImageTmpPath  = null;
-$profileImageExt      = null;
+// Temp vars for upload handling
+$profileImageTmpPath = null;
+$profileImageExt     = null;
 
+// -----------------------------
+// 3. Handle POST (update)
+// -----------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // ----------------------
-    // 1. Read & trim inputs
-    // ----------------------
+    // 3.1 Read & trim inputs
     $first_name       = trim($_POST['first_name'] ?? '');
     $last_name        = trim($_POST['last_name'] ?? '');
     $username         = trim($_POST['username'] ?? '');
-    $password         = trim($_POST['password'] ?? '');
+    $password         = trim($_POST['password'] ?? '');  // optional for edit
     $role             = trim($_POST['role'] ?? 'employee');
 
     $email            = trim($_POST['email'] ?? '');
@@ -55,10 +106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $social_twitter   = trim($_POST['social_twitter'] ?? '');
     $social_other     = trim($_POST['social_other'] ?? '');
 
-    // ----------------------
-    // 2. Basic validations
-    // ----------------------
-
+    // 3.2 Basic validations (similar to registration)
     if ($first_name === '') {
         $errors[] = 'First name is required.';
     }
@@ -69,15 +117,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($username === '') {
         $errors[] = 'Username is required.';
     }
-	
-	// Username: only lowercase letters a-z
-	if ($username !== '' && !preg_match('/^[a-z]+$/', $username)) {
-		$errors[] = 'Username must contain only lowercase letters (a-z).';
-	}
 
+    // Username: only lowercase letters a-z
+    if ($username !== '' && !preg_match('/^[a-z]+$/', $username)) {
+        $errors[] = 'Username must contain only lowercase letters (a-z).';
+    }
 
-    if ($password === '') {
-        $errors[] = 'Password is required.';
+    // For EDIT: password is OPTIONAL. Only validate if provided.
+    // (If blank, we keep the existing password.)
+    if ($password !== '') {
+        // Add any extra password rules here if you want
+        // e.g. minimum length
+        if (strlen($password) < 3) {
+            $errors[] = 'If you change the password, it must be at least 3 characters.';
+        }
     }
 
     $validRoles = ['admin', 'manager', 'employee'];
@@ -91,39 +144,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // Mobile: digits only, length 8–15
     if ($mobile !== '') {
-    // Remove everything that is not a digit (so "+91 9876543210" -> "919876543210")
-    $mobile_digits = preg_replace('/\D+/', '', $mobile);
-
-    if (!preg_match('/^[0-9]{8,15}$/', $mobile_digits)) {
-        $errors[] = 'Mobile number should contain 8 to 15 digits (numbers only).';
-    } else {
-        // Store normalized version in DB
-        $mobile = $mobile_digits;
+        $mobile_digits = preg_replace('/\D+/', '', $mobile);
+        if (!preg_match('/^[0-9]{8,15}$/', $mobile_digits)) {
+            $errors[] = 'Mobile number should contain 8 to 15 digits (numbers only).';
+        } else {
+            $mobile = $mobile_digits;
+        }
     }
-}
 
+    // Phone: optional, digits only 6–15
+    if ($phone !== '') {
+        $phone_digits = preg_replace('/\D+/', '', $phone);
+        if (!preg_match('/^[0-9]{6,15}$/', $phone_digits)) {
+            $errors[] = 'Phone number should contain 6 to 15 digits (numbers only).';
+        } else {
+            $phone = $phone_digits;
+        }
+    }
 
-    // Phone: digits, spaces, +, -, ()
-    // Phone: optional, strip non-digits (so "+91 2222334455" -> "912222334455")
-	if ($phone !== '') {
-		$phone_digits = preg_replace('/\D+/', '', $phone);
-
-		if (!preg_match('/^[0-9]{6,15}$/', $phone_digits)) {
-			$errors[] = 'Phone number should contain 6 to 15 digits (numbers only).';
-		} else {
-			// Store normalized version
-			$phone = $phone_digits;
-		}
-	}
-
-
-    // ---------------------------------
-    // 3. Profile image validation (if any)
-    // ---------------------------------
+    // 3.3 Profile image validation (if any new file uploaded)
     if (isset($_FILES['profile_image']) && is_array($_FILES['profile_image'])) {
         $fileError = $_FILES['profile_image']['error'];
 
-        if ($fileError !== UPLOAD_ERR_NOFILE && $fileError !== UPLOAD_ERR_NO_FILE) {
+        if ($fileError !== UPLOAD_ERR_NO_FILE) {
             if ($fileError !== UPLOAD_ERR_OK) {
                 $errors[] = 'Error during profile image upload. Please try again.';
             } else {
@@ -131,7 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $fileSize = (int)($_FILES['profile_image']['size'] ?? 0);
                 $origName = $_FILES['profile_image']['name'] ?? '';
 
-                $maxSize = 2 * 1024 * 1024;
+                $maxSize = 2 * 1024 * 1024; // 2 MB
                 if ($fileSize <= 0 || $fileSize > $maxSize) {
                     $errors[] = 'Profile image must be less than 2 MB.';
                 }
@@ -161,17 +204,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // ---------------------------------
-    // 4. Username uniqueness check
-    // ---------------------------------
+    // 3.4 Username uniqueness check (excluding current user)
     if (empty($errors) && $username !== '') {
-        $check = $mysqli->prepare('SELECT COUNT(*) AS c FROM users WHERE username = ?');
+        $check = $mysqli->prepare('SELECT COUNT(*) AS c FROM users WHERE username = ? AND id <> ?');
         if ($check) {
-            $check->bind_param('s', $username);
+            $check->bind_param('si', $username, $user_id);
             if ($check->execute()) {
-                $res = $check->get_result();
-                if ($res) {
-                    $row = $res->fetch_assoc();
+                $res_check = $check->get_result();
+                if ($res_check) {
+                    $row = $res_check->fetch_assoc();
                     if ((int)$row['c'] > 0) {
                         $errors[] = 'Username is already taken. Please choose another one.';
                     }
@@ -185,96 +226,112 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // ---------------------------------
-    // 5. If everything is still OK, handle image move + DB insert
-    // ---------------------------------
+    // 3.5 If OK so far, handle image move + DB update
     if (empty($errors)) {
+        // Handle image upload if a new one was selected
         if ($profileImageTmpPath && $profileImageExt) {
             $uploadDir = __DIR__ . '/uploads/profile_images';
-
             if (!is_dir($uploadDir)) {
                 @mkdir($uploadDir, 0777, true);
             }
 
-            try {
-                $random = bin2hex(random_bytes(8));
-            } catch (Exception $e) {
-                $random = bin2hex(uniqid('', true));
-            }
-
-            $newFilename = time() . '_' . $random . '.' . $profileImageExt;
-            $destPath    = $uploadDir . '/' . $newFilename;
-
             if (!is_writable($uploadDir)) {
                 $errors[] = 'Profile image directory is not writable. Please check folder permissions.';
             } else {
+                try {
+                    $random = bin2hex(random_bytes(8));
+                } catch (Exception $e) {
+                    $random = bin2hex(uniqid('', true));
+                }
+
+                $newFilename = time() . '_' . $random . '.' . $profileImageExt;
+                $destPath    = $uploadDir . '/' . $newFilename;
+
                 if (!move_uploaded_file($profileImageTmpPath, $destPath)) {
                     $errors[] = 'Failed to save the uploaded profile image.';
                 } else {
+                    // Set new profile image path for DB
                     $profile_image_path = 'uploads/profile_images/' . $newFilename;
+                    // Optionally: you could unlink() the old file here if you want.
                 }
             }
         }
+    }
 
-        if (empty($errors)) {
-            $full_name = trim($first_name . ' ' . $last_name);
+    if (empty($errors)) {
+        $full_name = trim($first_name . ' ' . $last_name);
 
-            $sql = 'INSERT INTO users (
-                        full_name,
-                        first_name,
-                        last_name,
-                        username,
-                        password,
-                        role,
-                        email,
-                        mobile,
-                        phone,
-                        address,
-                        social_facebook,
-                        social_linkedin,
-                        social_instagram,
-                        social_twitter,
-                        social_other,
-                        profile_image,
-                        created_at
-                    ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW()
-                    )';
+        // If password field empty, keep old; else use new one
+        $passwordToSave = $password !== '' ? $password : $existingPassword;
 
-            $stmt = $mysqli->prepare($sql);
-            if (!$stmt) {
-                $errors[] = 'Database error while preparing insert: ' . $mysqli->error;
+        $sql = 'UPDATE users SET
+                    full_name        = ?,
+                    first_name       = ?,
+                    last_name        = ?,
+                    username         = ?,
+                    password         = ?,
+                    role             = ?,
+                    email            = ?,
+                    mobile           = ?,
+                    phone            = ?,
+                    address          = ?,
+                    social_facebook  = ?,
+                    social_linkedin  = ?,
+                    social_instagram = ?,
+                    social_twitter   = ?,
+                    social_other     = ?,
+                    profile_image    = ?
+                WHERE id = ?';
+
+        $stmt = $mysqli->prepare($sql);
+        if (!$stmt) {
+            $errors[] = 'Database error while preparing update: ' . $mysqli->error;
+        } else {
+            $stmt->bind_param(
+                'ssssssssssssssssi',
+                $full_name,
+                $first_name,
+                $last_name,
+                $username,
+                $passwordToSave,      // still plain text as in registration
+                $role,
+                $email,
+                $mobile,
+                $phone,
+                $address,
+                $social_facebook,
+                $social_linkedin,
+                $social_instagram,
+                $social_twitter,
+                $social_other,
+                $profile_image_path,
+                $user_id
+            );
+
+            if ($stmt->execute()) {
+                $success = 'User details updated successfully.';
+
+                // Refresh "existing" values for further edits without reloading page
+                $existingPassword           = $passwordToSave;
+                $user['profile_image']      = $profile_image_path;
+                $user['first_name']         = $first_name;
+                $user['last_name']          = $last_name;
+                $user['username']           = $username;
+                $user['role']               = $role;
+                $user['email']              = $email;
+                $user['mobile']             = $mobile;
+                $user['phone']              = $phone;
+                $user['address']            = $address;
+                $user['social_facebook']    = $social_facebook;
+                $user['social_linkedin']    = $social_linkedin;
+                $user['social_instagram']   = $social_instagram;
+                $user['social_twitter']     = $social_twitter;
+                $user['social_other']       = $social_other;
             } else {
-                $stmt->bind_param(
-                    'ssssssssssssssss',
-                    $full_name,
-                    $first_name,
-                    $last_name,
-                    $username,
-                    $password,      // plain text (you’ll hash later)
-                    $role,
-                    $email,
-                    $mobile,
-                    $phone,
-                    $address,
-                    $social_facebook,
-                    $social_linkedin,
-                    $social_instagram,
-                    $social_twitter,
-                    $social_other,
-                    $profile_image_path
-                );
-
-                if ($stmt->execute()) {
-                    $stmt->close();
-                    $msg = urlencode('User created successfully.');
-                    header("Location: manage_users.php?msg={$msg}");
-                    exit;
-                } else {
-                    $errors[] = 'Failed to create user: ' . $stmt->error;
-                    $stmt->close();
-                }
+                $errors[] = 'Failed to update user: ' . $stmt->error;
             }
+
+            $stmt->close();
         }
     }
 }
@@ -319,7 +376,7 @@ include 'header.php';
     margin-bottom: 0.2rem;
   }
   .reg-input {
-	font-size: 0.85rem;
+    font-size: 0.85rem;
     border: none;
     border-bottom: 1px solid #ccc;
     border-radius: 0;
@@ -356,7 +413,7 @@ include 'header.php';
 <div class="reg-page-bg d-flex justify-content-center align-items-center py-4">
   <div class="reg-card shadow-sm">
     <div class="reg-card-header text-center text-white">
-      <h2 class="mb-0">USER REGISTRATION</h2>
+      <h2 class="mb-0">EDIT USER DETAILS</h2>
     </div>
 
     <div class="reg-card-body">
@@ -368,6 +425,12 @@ include 'header.php';
               <li><?php echo htmlspecialchars($e, ENT_QUOTES, 'UTF-8'); ?></li>
             <?php endforeach; ?>
           </ul>
+        </div>
+      <?php endif; ?>
+
+      <?php if (!empty($success)): ?>
+        <div class="alert alert-success">
+          <?php echo htmlspecialchars($success, ENT_QUOTES, 'UTF-8'); ?>
         </div>
       <?php endif; ?>
 
@@ -405,26 +468,28 @@ include 'header.php';
             <div class="col-md-6 mb-4">
               <div class="reg-label">Username <span class="text-danger">*</span></div>
               <input
-				  type="text"
-				  class="form-control form-control-sm reg-input"
-				  id="username"
-				  name="username"
-				  value="<?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>"
-				  required
-				  pattern="[a-z]+"
-				  title="Only lowercase letters (a-z) are allowed"
-				>
-
+                type="text"
+                class="form-control form-control-sm reg-input"
+                id="username"
+                name="username"
+                value="<?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>"
+                required
+                pattern="[a-z]+"
+                title="Only lowercase letters (a-z) are allowed"
+              >
             </div>
             <div class="col-md-6 mb-4">
-              <div class="reg-label">Password <span class="text-danger">*</span></div>
+              <div class="reg-label">
+                Password
+                <small class="text-muted">(leave blank to keep current)</small>
+              </div>
               <input
                 type="password"
                 class="form-control form-control-sm reg-input"
                 id="password"
                 name="password"
-                value="<?php echo htmlspecialchars($password, ENT_QUOTES, 'UTF-8'); ?>"
-                required
+                value=""
+                placeholder="Enter new password only if changing"
               >
             </div>
           </div>
@@ -457,29 +522,27 @@ include 'header.php';
                 value="<?php echo htmlspecialchars($email, ENT_QUOTES, 'UTF-8'); ?>"
               >
             </div>
-			<div class="col-md-3 mb-4">
-			  <div class="reg-label">Mobile</div>
-			  <input
-				type="text"
-				class="form-control form-control-sm reg-input"
-				id="mobile"
-				name="mobile"
-				value="<?php echo htmlspecialchars($mobile, ENT_QUOTES, 'UTF-8'); ?>"
-				placeholder=""
-			  >
-			</div>
+            <div class="col-md-3 mb-4">
+              <div class="reg-label">Mobile</div>
+              <input
+                type="text"
+                class="form-control form-control-sm reg-input"
+                id="mobile"
+                name="mobile"
+                value="<?php echo htmlspecialchars($mobile, ENT_QUOTES, 'UTF-8'); ?>"
+              >
+            </div>
 
             <div class="col-md-3 mb-4">
-			  <div class="reg-label">Phone</div>
-			  <input
-				type="text"
-				class="form-control form-control-sm reg-input"
-				id="phone"
-				name="phone"
-				value="<?php echo htmlspecialchars($phone, ENT_QUOTES, 'UTF-8'); ?>"
-				placeholder=""
-			  >
-			</div>
+              <div class="reg-label">Phone</div>
+              <input
+                type="text"
+                class="form-control form-control-sm reg-input"
+                id="phone"
+                name="phone"
+                value="<?php echo htmlspecialchars($phone, ENT_QUOTES, 'UTF-8'); ?>"
+              >
+            </div>
           </div>
 
           <div class="mb-4">
@@ -557,10 +620,22 @@ include 'header.php';
 
         <!-- Block 4: Profile Image -->
         <div class="mb-4">
-          <div class="reg-section-title">Profile Image (optional)</div>
+          <div class="reg-section-title">Profile Image</div>
+
+          <?php if (!empty($profile_image_path)): ?>
+            <div class="mb-3 text-center">
+              <div class="reg-label mb-1">Current Profile Image</div>
+              <img
+                src="<?php echo htmlspecialchars($profile_image_path, ENT_QUOTES, 'UTF-8'); ?>"
+                alt="Profile Image"
+                class="rounded-circle"
+                style="width: 100px; height: 100px; object-fit: cover;"
+              >
+            </div>
+          <?php endif; ?>
 
           <div class="mb-3">
-            <div class="reg-label">Upload Profile Image</div>
+            <div class="reg-label">Upload New Profile Image (optional)</div>
             <input
               type="file"
               class="form-control form-control-sm reg-input"
@@ -576,7 +651,7 @@ include 'header.php';
 
         <div class="d-flex justify-content-between mt-3">
           <a href="manage_users.php" class="btn btn-outline-secondary btn-sm">Back</a>
-          <button type="submit" class="btn btn-primary btn-sm">Create User</button>
+          <button type="submit" class="btn btn-primary btn-sm">Save Changes</button>
         </div>
       </form>
     </div>
@@ -589,17 +664,13 @@ document.addEventListener('DOMContentLoaded', function () {
     var input = document.getElementById(inputId);
     if (!input) return;
 
-    // When user focuses the field
     input.addEventListener('focus', function () {
       if (input.value.trim() === '') {
         input.value = '+91 ';
-        // cursor will already be at the end
       }
     });
 
-    // When user leaves the field
     input.addEventListener('blur', function () {
-      // If they didn't type anything except the prefix, clear it again
       if (input.value.trim() === '+91') {
         input.value = '';
       }
@@ -622,13 +693,9 @@ document.addEventListener('DOMContentLoaded', function () {
   emailInput.addEventListener('blur', function () {
     var val = emailInput.value.trim();
 
-    // If empty, do nothing
     if (val === '') return;
-
-    // If user already typed an @something.com, don't change it
     if (val.indexOf('@') !== -1) return;
 
-    // Otherwise, user typed just the name -> append @gmail.com
     emailInput.value = val + defaultSuffix;
   });
 });

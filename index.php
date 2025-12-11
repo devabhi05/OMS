@@ -73,11 +73,7 @@ include 'header.php';
     </form>
 
     <div class="mt-3">
-      <small>Sample logins after importing SQL:<br>
-        admin / admin123<br>
-        manager / manager123<br>
-        employee / employee123
-      </small>
+
     </div>
   </div>
 </div>

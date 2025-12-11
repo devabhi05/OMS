@@ -11,8 +11,6 @@ if (is_logged_in()) {
     }
 }
 
-
-
 // Clear the session and redirect to login
 session_unset();
 session_destroy();

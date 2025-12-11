@@ -82,7 +82,12 @@ if ($role === 'manager') {
     $where .= " AND ts.manager_approved = 1 AND LOWER(TRIM(ts.status)) = 'completed'";
 }
 
-$sql = "SELECT ts.*, t.id AS task_id, t.title AS task_title, t.status AS task_status, u.full_name AS employee_name
+$sql = "SELECT ts.*, 
+				t.id AS task_id, 
+				t.title AS task_title,
+				t.description AS task_description,
+				t.status AS task_status, 
+				u.full_name AS employee_name
         FROM timesheets ts
         JOIN tasks t ON ts.task_id = t.id
         JOIN users u ON ts.user_id = u.id
@@ -107,10 +112,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
 
     $output = fopen('php://output', 'w');
     // CSV header row
-    fputcsv($output, ['Task', 'Person', 'Date Created', 'Date Completed', 'Status']);
+    fputcsv($output, ['Task', 'Description', 'Person', 'Date Created', 'Date Completed', 'Status']);
 
     foreach ($rows as $r) {
         $task         = $r['task_title'] ?? '';
+		$description  = $r['task_description'] ?? '';
         $person       = $r['employee_name'] ?? '';
         $createdraw   = $r['created_at'] ?? '';   // from timesheets
         $completedraw = $r['work_date'] ?? '';    // work date as completion date
@@ -127,6 +133,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
 
         fputcsv($output, [
             $task,
+			$description,
             $person,
             $dateCreated,
             $dateCompleted,
