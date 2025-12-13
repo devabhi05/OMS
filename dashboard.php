@@ -244,6 +244,36 @@ if ($isEmployee) {
         }
         $stmt->close();
     }
+	
+	// Today's Check In/Out + Lunch In/Out (attendance table)
+		$todayCheckIn = null;
+		$todayLunchIn = null;
+		$todayLunchOut = null;
+		$todayBreakDuration = null;
+		$todayCheckOut = null;
+
+		$stmt = $mysqli->prepare("
+			SELECT check_in, lunch_in, lunch_out, break_duration, check_out
+			FROM attendance
+			WHERE user_id = ? AND work_date = CURDATE()
+			LIMIT 1
+		");
+		if ($stmt) {
+			$stmt->bind_param('i', $userId);
+			$stmt->execute();
+			$res = $stmt->get_result();
+			if ($row = $res->fetch_assoc()) {
+				$todayCheckIn = $row['check_in'] ?? null;
+				$todayLunchIn = $row['lunch_in'] ?? null;
+				$todayLunchOut = $row['lunch_out'] ?? null;
+				$todayBreakDuration = $row['break_duration'] ?? null;
+				$todayCheckOut = $row['check_out'] ?? null;
+			}
+			$stmt->close();
+		}
+
+
+
 }
 ?>
 
@@ -508,6 +538,100 @@ if ($isEmployee) {
         <strong>My Summary</strong>
       </div>
       <div class="card-body">
+	  
+	  
+	  <!-- Lunch In button -->
+		<!-- Check In/Out + Lunch In/Out (single row) -->
+		<div class="border rounded p-3 mb-4">
+		  <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+			<div>
+			  <div class="small text-muted">Today</div>
+
+			  <div class="d-flex flex-wrap gap-2 mt-1">
+				<span class="badge text-bg-light">
+				  Check In: <span id="checkInValue"><?php echo $todayCheckIn ? date('h:i A', strtotime($todayCheckIn)) : 'Not marked'; ?></span>
+				</span>
+
+				<span class="badge text-bg-light">
+				  Lunch In: <span id="lunchInValue"><?php echo $todayLunchIn ? date('h:i A', strtotime($todayLunchIn)) : 'Not marked'; ?></span>
+				</span>
+
+				<span class="badge text-bg-light">
+				  Lunch Out: <span id="lunchOutValue"><?php echo $todayLunchOut ? date('h:i A', strtotime($todayLunchOut)) : 'Not marked'; ?></span>
+				</span>
+
+				<span class="badge text-bg-light">
+				  Break: <span id="lunchBreakValue"><?php echo $todayBreakDuration ? substr($todayBreakDuration, 0, 5) : '--'; ?></span>
+				</span>
+
+				<span class="badge text-bg-light">
+				  Check Out: <span id="checkOutValue"><?php echo $todayCheckOut ? date('h:i A', strtotime($todayCheckOut)) : 'Not marked'; ?></span>
+				</span>
+			  </div>
+			</div>
+
+			<div class="d-flex gap-2 flex-wrap">
+			  <?php
+				// Check In / Check Out rules
+				$ciDisabled = !empty($todayCheckIn);
+				$ciTip = $ciDisabled ? 'Check In already marked for today' : 'Click to mark current time';
+
+				if (empty($todayCheckIn)) {
+				  $coDisabled = true;
+				  $coTip = 'Mark Check In first';
+				} else {
+				  $coDisabled = !empty($todayCheckOut);
+				  $coTip = $coDisabled ? 'Check Out already marked for today' : 'Click to mark current time';
+				}
+
+				// Lunch In / Lunch Out rules (your existing logic)
+				$inDisabled = !empty($todayLunchIn);
+				$inTip = $inDisabled ? 'Lunch In already marked for today' : 'Click to mark current time';
+
+				if (empty($todayLunchIn)) {
+				  $outDisabled = true;
+				  $outTip = 'Mark Lunch In first';
+				} else {
+				  $outDisabled = !empty($todayLunchOut);
+				  $outTip = $outDisabled ? 'Lunch Out already marked for today' : 'Click to mark current time';
+				}
+			  ?>
+
+			  <!-- Check In (before Lunch In) -->
+			  <span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip" title="<?php echo htmlspecialchars($ciTip); ?>">
+				<button type="button" id="btnCheckIn" class="btn btn-outline-success btn-sm" <?php echo $ciDisabled ? 'disabled' : ''; ?>>
+				  Check In
+				</button>
+			  </span>
+
+			  <!-- Lunch In -->
+			  <span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip" title="<?php echo htmlspecialchars($inTip); ?>">
+				<button type="button" id="btnLunchIn" class="btn btn-outline-primary btn-sm" <?php echo $inDisabled ? 'disabled' : ''; ?>>
+				  Lunch In
+				</button>
+			  </span>
+
+			  <!-- Lunch Out -->
+			  <span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip" title="<?php echo htmlspecialchars($outTip); ?>">
+				<button type="button" id="btnLunchOut" class="btn btn-outline-secondary btn-sm" <?php echo $outDisabled ? 'disabled' : ''; ?>>
+				  Lunch Out
+				</button>
+			  </span>
+
+			  <!-- Check Out (after Lunch Out) -->
+			  <span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip" title="<?php echo htmlspecialchars($coTip); ?>">
+				<button type="button" id="btnCheckOut" class="btn btn-outline-danger btn-sm" <?php echo $coDisabled ? 'disabled' : ''; ?>>
+				  Check Out
+				</button>
+			  </span>
+			</div>
+		  </div>
+
+		  <!-- Single alert for all 4 actions -->
+		  <div id="lunchInAlert" class="alert d-none py-2 mt-3 mb-0 fade" role="alert"></div>
+		</div>
+
+
         <!-- Today's Tasks & Logged Hours -->
         <div class="mb-4">
           <h5 class="card-title mb-2">Today&rsquo;s Tasks &amp; Logged Hours</h5>
@@ -607,6 +731,251 @@ if ($isEmployee) {
   </div>
 </div>
 <?php endif; ?>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  // Init tooltips (Bootstrap caches title → we’ll rebuild on updates)
+  document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+    new bootstrap.Tooltip(el);
+  });
+
+  // Buttons
+  const btnCheckIn  = document.getElementById('btnCheckIn');
+  const btnLunchIn  = document.getElementById('btnLunchIn');
+  const btnLunchOut = document.getElementById('btnLunchOut');
+  const btnCheckOut = document.getElementById('btnCheckOut');
+
+  // Tooltip wrapper elements (SPANS)
+  const tipCheckInEl  = btnCheckIn  ? btnCheckIn.closest('[data-bs-toggle="tooltip"]')  : null;
+  const tipLunchInEl  = btnLunchIn  ? btnLunchIn.closest('[data-bs-toggle="tooltip"]')  : null;
+  const tipLunchOutEl = btnLunchOut ? btnLunchOut.closest('[data-bs-toggle="tooltip"]') : null;
+  const tipCheckOutEl = btnCheckOut ? btnCheckOut.closest('[data-bs-toggle="tooltip"]') : null;
+
+  // Badge value spans
+  const checkInVal  = document.getElementById('checkInValue');
+  const lunchInVal  = document.getElementById('lunchInValue');
+  const lunchOutVal = document.getElementById('lunchOutValue');
+  const breakVal    = document.getElementById('lunchBreakValue');
+  const checkOutVal = document.getElementById('checkOutValue');
+
+  // Single message box for all actions
+  const alertBox = document.getElementById('lunchInAlert');
+  let hideTimer = null;
+
+  function formatMysqlDateTime(dt) {
+    const d = new Date(String(dt).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return dt;
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function showAlert(type, msg) {
+    if (!alertBox) return;
+
+    alertBox.classList.remove('d-none');
+    alertBox.className = `alert alert-${type} py-2 mt-3 mb-0 fade show`;
+    alertBox.textContent = msg;
+
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      alertBox.classList.remove('show'); // fade out
+      setTimeout(() => alertBox.classList.add('d-none'), 200);
+    }, 3000);
+  }
+
+  function hideTooltip(tipEl) {
+    if (!tipEl) return;
+    const inst = bootstrap.Tooltip.getInstance(tipEl);
+    if (inst) inst.hide();
+  }
+
+  // KEY FIX: Update tooltip text immediately (Bootstrap caches it)
+  function updateTooltip(tipEl, newTitle) {
+    if (!tipEl) return;
+
+    tipEl.setAttribute('title', newTitle);
+    tipEl.setAttribute('data-bs-original-title', newTitle);
+
+    const inst = bootstrap.Tooltip.getInstance(tipEl);
+    if (inst) {
+      inst.hide();
+      inst.dispose();
+    }
+    new bootstrap.Tooltip(tipEl);
+  }
+
+  // Robust POST → ensures you get meaningful errors if server returns HTML/404
+  async function post(url) {
+    const r = await fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
+
+    const text = await r.text();
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      throw new Error(`Invalid JSON from ${url} (HTTP ${r.status}). ${text.slice(0, 160)}`);
+    }
+  }
+
+  // ----------------------------
+  // Check In
+  // ----------------------------
+  if (btnCheckIn) {
+    btnCheckIn.addEventListener('click', async function () {
+      btnCheckIn.disabled = true;
+      hideTooltip(tipCheckInEl);
+
+      try {
+        const data = await post('check_in.php');
+
+        if (data.ok) {
+          showAlert('success', data.message || 'Check In saved.');
+          if (data.check_in && checkInVal) checkInVal.textContent = formatMysqlDateTime(data.check_in);
+
+          // enable Check Out
+          if (btnCheckOut) btnCheckOut.disabled = false;
+
+          updateTooltip(tipCheckInEl, 'Check In already marked for today');
+          updateTooltip(tipCheckOutEl, 'Click to mark current time');
+        } else {
+          showAlert('warning', data.message || 'Could not save Check In.');
+
+          if (data.code === 'already_marked') {
+            updateTooltip(tipCheckInEl, 'Check In already marked for today');
+            if (data.check_in && checkInVal) checkInVal.textContent = formatMysqlDateTime(data.check_in);
+
+            if (btnCheckOut) btnCheckOut.disabled = false;
+            updateTooltip(tipCheckOutEl, 'Click to mark current time');
+          } else {
+            btnCheckIn.disabled = false; // allow retry
+          }
+        }
+      } catch (e) {
+        showAlert('danger', e.message || 'Network/server error. Please try again.');
+        btnCheckIn.disabled = false;
+      }
+    });
+  }
+
+  // ----------------------------
+  // Lunch In
+  // ----------------------------
+  if (btnLunchIn) {
+    btnLunchIn.addEventListener('click', async function () {
+      btnLunchIn.disabled = true;
+      hideTooltip(tipLunchInEl);
+
+      try {
+        const data = await post('lunch_in.php');
+
+        if (data.ok) {
+          showAlert('success', data.message || 'Lunch In saved.');
+          if (data.lunch_in && lunchInVal) lunchInVal.textContent = formatMysqlDateTime(data.lunch_in);
+
+          // enable Lunch Out
+          if (btnLunchOut) btnLunchOut.disabled = false;
+
+          updateTooltip(tipLunchInEl, 'Lunch In already marked for today');
+          updateTooltip(tipLunchOutEl, 'Click to mark current time');
+        } else {
+          showAlert('warning', data.message || 'Could not save Lunch In.');
+
+          if (data.code === 'already_marked') {
+            updateTooltip(tipLunchInEl, 'Lunch In already marked for today');
+            if (data.lunch_in && lunchInVal) lunchInVal.textContent = formatMysqlDateTime(data.lunch_in);
+
+            if (btnLunchOut) btnLunchOut.disabled = false;
+            updateTooltip(tipLunchOutEl, 'Click to mark current time');
+          } else {
+            btnLunchIn.disabled = false; // allow retry
+          }
+        }
+      } catch (e) {
+        showAlert('danger', e.message || 'Network/server error. Please try again.');
+        btnLunchIn.disabled = false;
+      }
+    });
+  }
+
+  // ----------------------------
+  // Lunch Out
+  // ----------------------------
+  if (btnLunchOut) {
+    btnLunchOut.addEventListener('click', async function () {
+      btnLunchOut.disabled = true;
+      hideTooltip(tipLunchOutEl);
+
+      try {
+        const data = await post('lunch_out.php');
+
+        if (data.ok) {
+          showAlert('success', data.message || 'Lunch Out saved.');
+          if (data.lunch_out && lunchOutVal) lunchOutVal.textContent = formatMysqlDateTime(data.lunch_out);
+          if (data.break_duration && breakVal) breakVal.textContent = String(data.break_duration).slice(0, 5);
+
+          updateTooltip(tipLunchOutEl, 'Lunch Out already marked for today');
+        } else {
+          showAlert('warning', data.message || 'Could not save Lunch Out.');
+
+          if (data.code === 'already_marked') {
+            updateTooltip(tipLunchOutEl, 'Lunch Out already marked for today');
+            if (data.lunch_out && lunchOutVal) lunchOutVal.textContent = formatMysqlDateTime(data.lunch_out);
+            if (data.break_duration && breakVal) breakVal.textContent = String(data.break_duration).slice(0, 5);
+          } else if (data.code === 'missing_lunch_in') {
+            // user must do Lunch In first
+            btnLunchOut.disabled = true;
+            updateTooltip(tipLunchOutEl, 'Mark Lunch In first');
+          } else {
+            btnLunchOut.disabled = false; // allow retry
+          }
+        }
+      } catch (e) {
+        showAlert('danger', e.message || 'Network/server error. Please try again.');
+        btnLunchOut.disabled = false;
+      }
+    });
+  }
+
+  // ----------------------------
+  // Check Out
+  // ----------------------------
+  if (btnCheckOut) {
+    btnCheckOut.addEventListener('click', async function () {
+      btnCheckOut.disabled = true;
+      hideTooltip(tipCheckOutEl);
+
+      try {
+        const data = await post('check_out.php');
+
+        if (data.ok) {
+          showAlert('success', data.message || 'Check Out saved.');
+          if (data.check_out && checkOutVal) checkOutVal.textContent = formatMysqlDateTime(data.check_out);
+
+          updateTooltip(tipCheckOutEl, 'Check Out already marked for today');
+        } else {
+          showAlert('warning', data.message || 'Could not save Check Out.');
+
+          if (data.code === 'already_marked') {
+            updateTooltip(tipCheckOutEl, 'Check Out already marked for today');
+            if (data.check_out && checkOutVal) checkOutVal.textContent = formatMysqlDateTime(data.check_out);
+          } else if (data.code === 'missing_check_in') {
+            btnCheckOut.disabled = true;
+            updateTooltip(tipCheckOutEl, 'Mark Check In first');
+          } else {
+            btnCheckOut.disabled = false; // allow retry
+          }
+        }
+      } catch (e) {
+        showAlert('danger', e.message || 'Network/server error. Please try again.');
+        btnCheckOut.disabled = false;
+      }
+    });
+  }
+});
+</script>
+
 
 <!-- Role-specific info banner -->
 <?php if ($_SESSION['role'] === 'admin'): ?>
